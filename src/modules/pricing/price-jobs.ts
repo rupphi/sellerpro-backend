@@ -32,6 +32,31 @@ export async function reconcile(store: Store, progress: (n: number) => Promise<v
     });
     return catalog;
 }
+// Lock preflight/readback does not need category trees, content or attributes.
+// Keep metadata and the user's protection targets untouched when refreshing observations.
+export async function refreshProtectionPrices(store: Store, progress: (n: number) => Promise<void>, productIds?: string[]) {
+    const api = adapter(store);
+    if (!api.hydratePrices) return reconcile(store, progress);
+    const products = await db.product.findMany({ where: { storeId: store.id, ...(productIds ? { id: { in: productIds } } : {}) } });
+    if (productIds && products.length !== new Set(productIds).size) throw new Error("Không tìm thấy đủ sản phẩm trong cửa hàng.");
+    if (!products.length) return;
+    const rows = await api.hydratePrices(products, progress);
+    const byId = new Map(rows.map(row => [row.externalId, row]));
+    if (rows.length !== products.length || byId.size !== products.length || products.some(p => !byId.has(p.externalId)))
+        throw new Error("Ozon chưa trả đủ giá sản phẩm. Chưa cập nhật dữ liệu.");
+    await db.$transaction(async tx => {
+        for (const product of products) {
+            const row = byId.get(product.externalId)!;
+            const saved = await tx.product.updateMany({
+                where: { id: product.id, storeId: store.id, version: product.version },
+                data: { price: row.price, discount: row.discount, salePrice: row.salePrice,
+                    minPrice: row.minPrice, oldPrice: row.oldPrice, currency: row.currency,
+                    raw: row.raw, version: { increment: 1 } },
+            });
+            if (saved.count !== 1) throw new Error("Giá vừa được cập nhật bởi tác vụ khác. Vui lòng thử lại.");
+        }
+    }, { timeout: 30000 });
+}
 export async function updatePrices(store: Store, changes: PriceChange[], taskId: string, progress: (n: number) => Promise<void>, guard = false, preserveLocks = false) {
     const api = adapter(store), errors: string[] = [], submitted: Product[] = [];
     for (let i = 0; i < changes.length; i++) {
@@ -111,7 +136,20 @@ export async function updatePrices(store: Store, changes: PriceChange[], taskId:
     if (submitted.length) {
         if (!store.demo) {
             await pause(2500);
-            await reconcile(store, async () => { });
+            try {
+                await refreshProtectionPrices(store, async () => { }, submitted.map(p => p.id));
+            } catch (error) {
+                // A readback failure must not replay already-submitted writes or claim success.
+                await db.$transaction(submitted.map(p => db.product.update({
+                    where: { id: p.id }, data: { protection: p.locked ? "attention" : "off" },
+                })));
+                await db.audit.createMany({ data: submitted.map(p => ({
+                    storeId: store.id, taskId, productId: p.id, action: "price.verification_unavailable",
+                    after: { message: "Đã gửi thay đổi; chưa đọc lại được giá để xác nhận." },
+                })) });
+                return { updated: submitted.length, errors: [...errors, `Đã gửi thay đổi nhưng chưa xác nhận được giá/khóa. ${(error as Error).message}`],
+                    notice: "Không tự gửi lại thay đổi. Cần đọc lại giá để kiểm tra." };
+            }
         }
         for (const expected of submitted) {
             const actual = await db.product.findUniqueOrThrow({
@@ -167,7 +205,8 @@ export async function updatePrices(store: Store, changes: PriceChange[], taskId:
     };
 }
 export async function guardPrices(store: Store, taskId: string, progress: (n: number) => Promise<void>) {
-    await reconcile(store, progress);
+    const protectedIds = await db.product.findMany({ where: { storeId: store.id, locked: true, targetPrice: { not: null } }, select: { id: true } });
+    if (protectedIds.length) await refreshProtectionPrices(store, progress, protectedIds.map(p => p.id));
     const locked = await db.product.findMany({
         where: { storeId: store.id, locked: true, targetPrice: { not: null } },
     });

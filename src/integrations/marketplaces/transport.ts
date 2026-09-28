@@ -1,5 +1,6 @@
 import { redis } from "../../infrastructure/clients";
 import { parseFinanceJson } from "./finance-json";
+import { MarketplaceHttpError } from "./read-retry";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Shared across worker processes and all stores using the same marketplace account.
 export async function reserveSlot(key: string, intervalMs: number) {
@@ -41,9 +42,10 @@ export async function request(account: string, url: string, headers: Record<stri
         }
         // No blind transport retry after an ambiguous write or timeout.
         if (!response.ok) {
+            await response.body?.cancel();
             console.error('Marketplace request failed', response.status, new URL(url).pathname);
             if (finance) throw new Error(response.status === 401 || response.status === 403 ? "Chưa đọc được quyết toán. Kiểm tra quyền Tài chính của khóa truy cập và phạm vi hỗ trợ của sàn." : "Chưa lấy được báo cáo tài chính. Vui lòng thử lại sau.");
-            throw new Error(response.status === 401 || response.status === 403 ? 'Không kết nối được cửa hàng. Vui lòng kiểm tra khóa truy cập và quyền quản lý sản phẩm.' : 'Sàn chưa chấp nhận yêu cầu. Vui lòng kiểm tra thông tin sản phẩm và thử lại.');
+            throw new MarketplaceHttpError(response.status, response.status === 401 || response.status === 403 ? 'Không kết nối được cửa hàng. Vui lòng kiểm tra khóa truy cập và quyền quản lý sản phẩm.' : 'Sàn chưa chấp nhận yêu cầu. Vui lòng kiểm tra thông tin sản phẩm và thử lại.');
         }
         if (response.status === 204) return null;
         return finance ? parseFinanceJson(await response.text()) as any : await response.json() as any;

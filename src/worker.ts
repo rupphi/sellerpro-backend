@@ -5,7 +5,7 @@ import { db, redis, queue, notify, taskQueueName } from "./infrastructure/client
 import { env } from "./config/env";
 import { syncBuyerPrices } from "./modules/pricing/buyer-price-sync.service";
 import { scheduleAutomation } from "./modules/automation/automation.scheduler";
-import { reconcile, updatePrices, guardPrices } from "./modules/pricing/price-jobs";
+import { reconcile, updatePrices, guardPrices, refreshProtectionPrices } from "./modules/pricing/price-jobs";
 import { syncSales } from "./modules/sales/sales-sync.service";
 import { syncFinance } from "./modules/finance/finance.service";
 import { runInitialization } from "./modules/automation/initialization.runner";
@@ -138,8 +138,13 @@ async function processTask(job: Job) {
                 productIds: string[];
             };
             // Same account lease/FIFO as prices and guards; no competing lock writes.
-            if (locked)
-                await reconcile(store, async () => { });
+            if (locked) {
+                try {
+                    await refreshProtectionPrices(store, async () => { }, productIds);
+                } catch (error) {
+                    throw new UnrecoverableError(`Chưa bật khóa giá: không đọc được giá hiện tại. Chưa gửi thay đổi sang sàn. ${(error as Error).message}`);
+                }
+            }
             const products = await db.product.findMany({
                 where: { storeId: store.id, id: { in: productIds } },
             });

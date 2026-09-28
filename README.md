@@ -28,3 +28,16 @@ requires a local API and explicit `RUN_LIVE_API_TEST=1`.
 Production CI runs tests, builds a Linux container and saves an immutable image artifact.
 CD is opt-in with DEPLOY_ENABLED after server bootstrap. See [deployment](deploy/README.md).
 The frontend is maintained in [sellerpro-frontend](https://github.com/rupphi/sellerpro-frontend).
+
+## Ozon protection reads
+
+Lock preflight, periodic protection and post-write verification refresh price observations
+through `/v5/product/info/prices` only; existing product metadata and protection targets are
+preserved. Transient timeout/network/5xx failures on this explicitly read-only endpoint get
+at most three attempts through the shared rate limiter. Authentication/validation failures
+are not retried. Price uploads never inherit this retry policy.
+
+A failed preflight does not send price changes. A failed readback after a successful upload
+is marked `attention` / `needs_review` and recorded in the audit, not reported as verified.
+This does not change Ozon promotion settings or imply every product is protected; the API
+response flags and effective seller price must still pass the existing verification checks.

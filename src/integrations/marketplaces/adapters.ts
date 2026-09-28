@@ -2,6 +2,7 @@ import type { Product, Store } from "@prisma/client";
 import { decrypt } from "../../common/security";
 import { CatalogItem, effective, money, rubles } from "../../modules/pricing/pricing.domain";
 import { request } from "./transport";
+import { retryPriceRead } from "./read-retry";
 import { env } from "../../config/env";
 import { fetchOzonSales, fetchWbSales, BuyerPriceResult } from "./buyer-prices";
 export interface Adapter {
@@ -27,7 +28,8 @@ export class OzonAdapter implements Adapter {
         clientId?: string;
     }) { }
     call(path: string, body?: unknown) {
-        return request(this.account, `https://api-seller.ozon.ru${path}`, { "Client-Id": this.creds.clientId!, "Api-Key": this.creds.apiKey }, body);
+        const operation = () => request(this.account, `https://api-seller.ozon.ru${path}`, { "Client-Id": this.creds.clientId!, "Api-Key": this.creds.apiKey }, body);
+        return path === "/v5/product/info/prices" ? retryPriceRead(operation) : operation();
     }
     buyerPrices() {
         return fetchOzonSales((path, body) => this.call(path, body));
