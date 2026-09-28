@@ -1,0 +1,174 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+enum UserRole {
+  USER
+  ADMIN
+}
+model User {
+  id           String @id @default(uuid())
+  username     String @unique
+  passwordHash String
+  role         UserRole @default(USER)
+  createdAt    DateTime @default(now())
+  automation   Json @default("{}")
+  automationUpdatedAt DateTime?
+  sessions     Session[]
+  stores       Store[]
+  notifications Notification[]
+}
+model Session {
+  id        String @id
+  userId    String
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime?
+  renewedAt DateTime @default(now())
+  @@index([expiresAt])
+}
+model Store {
+  id          String @id @default(uuid())
+  userId      String
+  user        User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  platform    String
+  credentials String
+  fingerprint String
+  demo        Boolean @default(false)
+  status      String @default("pending")
+  lastSyncAt  DateTime?
+  lastGuardAt DateTime?
+  buyerPricesCheckedAt DateTime?
+  buyerPricesStatus String @default("pending")
+  createdAt   DateTime @default(now())
+  products    Product[]
+  tasks       Task[]
+  audits      Audit[]
+  salesEvents SalesEvent[]
+  salesSources SalesSource[]
+  financeSnapshots FinanceSnapshot[]
+  @@unique([userId, platform, fingerprint])
+}
+// Atomic snapshots per requested period. Never sum overlapping snapshots together.
+model FinanceSnapshot {
+  id String @id @default(uuid())
+  storeId String
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  from String
+  to String
+  status String @default("pending")
+  data Json?
+  error String?
+  checkedAt DateTime?
+  succeededAt DateTime?
+  @@unique([storeId, from, to])
+}
+// Operational ledger, not a replacement for marketplace settlement reports.
+model SalesEvent {
+  id String @id @default(uuid())
+  storeId String
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  source String
+  externalKey String
+  orderKey String
+  kind String
+  occurredAt DateTime
+  channel String
+  status String
+  article String @default("")
+  productKey String @default("")
+  title String @default("")
+  quantity Int
+  amount Float?
+  currency String @default("RUB")
+  collectedAt DateTime @default(now())
+  @@unique([storeId, source, externalKey])
+  @@index([storeId, occurredAt, kind])
+  @@index([storeId, orderKey])
+}
+model SalesSource {
+  id String @id @default(uuid())
+  storeId String
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  source String
+  status String
+  coveredFrom DateTime?
+  coveredTo DateTime?
+  checkedAt DateTime @default(now())
+  error String?
+  data Json?
+  @@unique([storeId, source])
+}
+model Product {
+  id          String @id @default(uuid())
+  storeId     String
+  store       Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  externalId  String
+  article     String
+  title       String
+  brand       String @default("")
+  category    String @default("")
+  image       String @default("")
+  price       Int
+  discount    Int @default(0)
+  salePrice   Int
+  minPrice    Int @default(0)
+  oldPrice    Int @default(0)
+  currency    String @default("RUB")
+  stock       Int?
+  locked      Boolean @default(false)
+  targetPrice Int?
+  targetDiscount Int?
+  protection  String @default("off")
+  checkedAt   DateTime?
+  version     Int @default(1)
+  raw         Json @default("{}")
+  buyerPrice  Json?
+  updatedAt   DateTime @updatedAt
+  @@unique([storeId, externalId])
+  @@index([storeId, category])
+}
+model Task {
+  id          String @id @default(uuid())
+  storeId     String
+  store       Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind        String
+  scheduleKey String? @unique
+  status      String @default("queued")
+  progress    Int @default(0)
+  payload     Json @default("{}")
+  result      Json?
+  error       String?
+  attempts    Int @default(0)
+  createdAt   DateTime @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  @@index([status, createdAt])
+  @@index([storeId, createdAt])
+}
+model Audit {
+  id        String @id @default(uuid())
+  storeId   String
+  store     Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  taskId    String?
+  productId String?
+  action    String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+  @@index([storeId, createdAt])
+}
+model Notification {
+  id        String @id @default(uuid())
+  userId    String
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  level     String @default("info")
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+}

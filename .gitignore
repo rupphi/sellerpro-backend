@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.env*
+!.env.example
+*.log
+*.tsbuildinfo
+coverage/
+.DS_Store
+*.pem
+*.key
+*.dump
+*.sql.gz
+shop.txt
+outputs/
+data/
+deploy/.env
+deploy/.images.env*
+deploy/backups/
+deploy/incoming/
+# Workstation-only marketplace audit/backfill utilities; not application releases.
+scripts/verify-marketplaces.ts
+scripts/inspect-buyer-prices.ts
+scripts/sync-buyer-prices.ts
+scripts/import-verified-finance.ts
+scripts/set-hourly-sales.ts

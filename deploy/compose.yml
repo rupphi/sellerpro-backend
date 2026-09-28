@@ -1,0 +1,77 @@
+name: sellerpro
+x-app: &app
+  image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE in .images.env}
+  env_file: .env
+  environment:
+    NODE_ENV: production
+    HOST: 0.0.0.0
+    PORT: 4000
+    TRUST_PROXY_HOPS: 1
+    APP_ORIGIN: https://sellerpro.org
+    DATABASE_URL: postgresql://sellerpro:${POSTGRES_PASSWORD:?required}@postgres:5432/sellerpro
+    REDIS_URL: redis://redis:6379
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 90s
+  logging: &logs
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: sellerpro
+      POSTGRES_USER: sellerpro
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    restart: unless-stopped
+    logging: *logs
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U sellerpro -d sellerpro"]
+      interval: 5s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: [redis-server, --appendonly, "yes", --maxmemory-policy, noeviction]
+    volumes: [redis_data:/data]
+    restart: unless-stopped
+    logging: *logs
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      retries: 20
+  migrate:
+    <<: *app
+    restart: "no"
+    profiles: [tools]
+    command: [./node_modules/.bin/prisma, migrate, deploy]
+  api:
+    <<: *app
+    ports: ["127.0.0.1:14000:4000"]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+  worker:
+    <<: *app
+    command: [node, dist/worker.js]
+  web:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE in .images.env}
+    ports: ["127.0.0.1:13000:3000"]
+    restart: unless-stopped
+    init: true
+    logging: *logs
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+volumes:
+  postgres_data:
+  redis_data:

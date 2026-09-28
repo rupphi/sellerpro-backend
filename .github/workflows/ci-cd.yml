@@ -1,0 +1,87 @@
+name: CI and production deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sellerpro
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: sellerpro_test
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U sellerpro -d sellerpro_test" --health-interval 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://sellerpro:ci_only_password@127.0.0.1:5432/sellerpro_test
+      REDIS_URL: redis://127.0.0.1:6379
+      CREDENTIALS_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run db:migrate
+      - run: npm test
+      - run: npm run test:integration
+      - name: Normal-mode demo isolation
+        run: |
+          node dist/main.js &
+          api_pid=$!
+          trap 'kill "$api_pid" || true' EXIT
+          RUN_LIVE_API_TEST=1 ./node_modules/.bin/tsx --test test/no-demo.test.ts
+      - name: Build production container
+        run: docker build -t sellerpro-backend:${{ github.sha }} .
+      - name: Package image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: docker save sellerpro-backend:${{ github.sha }} | gzip > ${{ runner.temp }}/backend-${{ github.sha }}.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          name: image-${{ github.sha }}
+          path: ${{ runner.temp }}/backend-${{ github.sha }}.tar.gz
+          compression-level: 0
+          retention-days: 7
+      - name: Deploy verified image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.DEPLOY_ENABLED == 'true'
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq .object.sha)
+          if [[ "$current" != "${{ github.sha }}" ]]; then
+            echo "Superseded by a newer main commit; skipping deployment."
+            exit 0
+          fi
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ssh/key"
+          opts=(-i "$RUNNER_TEMP/ssh/key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts" -p "$DEPLOY_PORT")
+          ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "upload backend ${{ github.sha }}" < "$RUNNER_TEMP/backend-${{ github.sha }}.tar.gz"
+          ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "deploy backend ${{ github.sha }}"

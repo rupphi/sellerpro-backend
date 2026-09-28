@@ -1,0 +1,11 @@
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/**
+!prisma/
+!prisma/**
+!scripts/
+scripts/**
+!scripts/provision-admin.ts
