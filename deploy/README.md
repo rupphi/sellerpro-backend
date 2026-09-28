@@ -44,6 +44,10 @@ and release commands. It cannot open a shell, forward ports, or run arbitrary SS
 Do not reuse your personal root key in GitHub. The release process has Docker access, which
 is root-equivalent; restrict repository write access and require main branch reviews.
 CD runs only for successful main builds; pull requests cannot access deployment secrets.
+Alternatively, after the operator creates `.env` and `.images.env` with the intended first
+commit tags, CI can bootstrap: the first arriving image is staged and the second starts
+the full stack. A staged build alone does not mean the website is live. The `.initialized`
+marker is written only after both public HTTPS probes succeed.
 
 ## Recovery / operations
 
