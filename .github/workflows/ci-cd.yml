@@ -43,6 +43,8 @@ jobs:
       - run: npm test
       - run: npm run test:integration
       - name: Normal-mode demo isolation
+        env:
+          NODE_ENV: production
         run: |
           node dist/main.js &
           api_pid=$!
